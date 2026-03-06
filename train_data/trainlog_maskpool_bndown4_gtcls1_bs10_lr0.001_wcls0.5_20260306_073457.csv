@@ -1,0 +1,1 @@
+epoch,train_loss,val_dice,val_iou,val_bbox_iou,val_bbox_acc05,val_cls_acc,lr_enc,lr_seg,lr_cls

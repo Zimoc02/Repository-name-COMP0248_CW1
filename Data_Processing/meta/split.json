@@ -1,0 +1,12 @@
+{
+  "seed": 42,
+  "val_ratio": 0.2,
+  "val_students": [
+    "Bruce Jiang_8077752_assignsubmission_file_23064347_Jiang",
+    "Jiali Yi_8077756_assignsubmission_file_25067254_Yi",
+    "Johnny Weng_8077759_assignsubmission_file_20077685_Weng",
+    "Logic He_8077754_assignsubmission_file_25045993_He",
+    "Xinyan Guan_8077775_assignsubmission_file_25150455_Guan",
+    "Yifan Shao_8077772_assignsubmission_file_25128153_Shao"
+  ]
+}

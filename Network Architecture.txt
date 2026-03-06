@@ -1,0 +1,221 @@
+1) 总体架构概览
+
+输入：RGB-D（4 通道）
+输出：
+
+Segmentation mask logits：1×H×W（hand vs background）
+
+Gesture class logits：10 类
+
+BBox：由预测 mask 计算得到（xmin, ymin, xmax, ymax）
+
+核心思想：
+以 分割为主任务（因为你们有 mask GT），bbox 由 mask 推导，分类从共享特征分支输出。
+
+2) 数据流与模块结构
+
+假设训练时统一 resize 到 (H, W)，例如 256×256。
+
+2.1 输入预处理
+
+RGB：I_rgb ∈ R^{3×H×W}，归一化（ImageNet mean/std 或自己统计）
+
+Depth：I_d ∈ R^{1×H×W}，建议做：
+
+clip 到合理范围（按你 depth png 的编码）
+
+归一化到 [0,1] 或 z-score（(d-μ)/σ）
+
+拼接：X = concat(I_rgb, I_d) ∈ R^{4×H×W}
+
+2.2 共享编码器 Encoder（UNet 风格下采样）
+
+采用 4 个尺度（你也可以 3 个更轻）：
+
+Stem：Conv(4→C) + BN + ReLU + Conv(C→C)
+
+Down Block i（i=1..4）：
+
+两层 Conv3×3（带 BN+ReLU）
+
+MaxPool2×2 下采样（最后一层不 pool，作为 bottleneck）
+
+设 C=32（轻量，适合 coursework），各层通道：
+
+Level0: 32
+
+Level1: 64
+
+Level2: 128
+
+Level3: 256
+
+Bottleneck: 512（也可 256）
+
+输出特征（并缓存 skip）：
+
+F0: 32×H×W
+
+F1: 64×H/2×W/2
+
+F2: 128×H/4×W/4
+
+F3: 256×H/8×W/8
+
+Fb: 512×H/16×W/16
+
+2.3 分割解码器 Decoder（UNet 上采样 + skip）
+
+逐层上采样恢复分辨率：
+
+每个 Up Block：
+
+UpSample×2（bilinear 或 transposed conv）
+
+与对应 skip concat
+
+两层 Conv3×3（BN+ReLU）
+
+形状例子：
+
+Up3：Fb (512×H/16×W/16) → up → 256×H/8×W/8 concat F3 → conv → 256×H/8×W/8
+
+Up2：→ 128×H/4×W/4
+
+Up1：→ 64×H/2×W/2
+
+Up0：→ 32×H×W
+
+Seg head：Conv1×1 (32→1)
+输出：S_logits ∈ R^{1×H×W}
+
+2.4 分类头 Classification Head（从共享特征到10类）
+
+从 bottleneck 特征（Fb）提取全局语义最稳：
+
+GAP：Fb (512×H/16×W/16) → 512
+
+MLP：Linear(512→256) + ReLU + Dropout(0.3) → Linear(256→10)
+输出：C_logits ∈ R^{10}
+
+你也可以加一个轻量注意力（SE）在 bottleneck 后当 improved 亮点，但 baseline 先别加。
+
+2.5 bbox 输出（从 mask 推导）
+
+推理时：
+
+S_prob = sigmoid(S_logits)
+
+二值化：S_bin = S_prob > t（t=0.5）
+
+找前景像素坐标集合 (x,y)：
+
+xmin = min(x), xmax = max(x)
+
+ymin = min(y), ymax = max(y)
+
+若前景为空（全黑）：输出空框或整图中心小框（并在报告里说明处理）
+
+训练/验证时 bbox GT 一致由 GT mask 计算。
+
+3) 训练目标与 Loss 设计
+
+你们的 label：
+
+mask_gt ∈ {0,1}^{H×W}（由 0/255 转 0/1）
+
+class_gt ∈ {0..9}
+
+3.1 Segmentation Loss（强监督）
+
+推荐组合（稳定、易解释）：
+
+L_seg = BCEWithLogitsLoss(S_logits, mask_gt) + λ_dice * (1 - Dice(S_prob, mask_gt))
+
+λ_dice = 1.0 常用
+
+Dice（前景二分类）：
+
+𝐷
+𝑖
+𝑐
+𝑒
+=
+2
+∑
+𝑝
+𝑔
++
+𝜖
+∑
+𝑝
++
+∑
+𝑔
++
+𝜖
+Dice=
+∑p+∑g+ϵ
+2∑pg+ϵ
+	​
+
+3.2 Classification Loss
+
+L_cls = CrossEntropyLoss(C_logits, class_gt)
+
+3.3 总损失（多任务加权）
+
+L = α * L_seg + β * L_cls
+
+baseline 推荐：α=1.0, β=0.5（或 1.0）
+
+后面可以当 improved 做一段 “loss weight sweep” 在报告里画表/图
+
+你如果后续把 “无mask帧” 用来做 cls-only：那就对 has_mask==0 的样本让 α=0 即可。
+
+4) 评估输出（和作业指标一一对应）
+
+你们最终要算：
+
+Segmentation
+
+mean IoU（前景类 IoU 或含背景的 mIoU）
+
+Dice
+
+Overlay 可视化（GT vs Pred）
+
+Detection（bbox）
+
+IoU(box_pred, box_gt)
+
+acc@0.5：IoU ≥ 0.5 的比例
+
+mean box IoU
+
+Classification
+
+top-1 accuracy
+
+macro F1
+
+confusion matrix
+
+bbox 这块你不用训练 bbox head，因为 bbox 是 mask 导出的系统输出。
+
+5) 你在报告里怎么描述这套架构（非常顺）
+
+“RGB-D improves segmentation robustness; segmentation provides geometric prior; bbox derived from predicted mask ensures consistent detection output.”
+
+“Multi-task learning with shared encoder reduces computation and improves feature reuse.”
+
+6) 你要我下一步给什么
+
+如果你说一句你打算用的训练分辨率（比如 256×256）和 depth 用 depth/*.png 还是 depth_raw/*.npy，我就可以把这套架构对应的：
+
+dataloader.py（RGB-D读取 + mask同步增强）
+
+model.py（4ch UNet + cls head）
+
+evaluate.py（mIoU/Dice + bbox IoU/acc@0.5 + top1/F1）
+按你们的目录结构直接写成可跑模板。

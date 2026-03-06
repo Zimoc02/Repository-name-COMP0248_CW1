@@ -1,0 +1,7 @@
+COMP0248_set_dataset/
+dataset/
+weights/
+__pycache__/
+*.pt
+*.pth
+*.pyc
